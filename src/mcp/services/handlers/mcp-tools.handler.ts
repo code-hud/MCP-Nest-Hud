@@ -134,7 +134,6 @@ export class McpToolsHandler extends McpHandlerBase {
     this.moduleRef.registerRequestByContextId(httpRequest, contextId);
 
     const factoryCtx: ToolFactoryContext = {
-      request: httpRequest.raw,
       moduleRef: this.moduleRef,
       resolve: <T>(token: Type<T> | string | symbol) =>
         this.moduleRef.resolve<T>(token as any, contextId, { strict: false }),

@@ -55,14 +55,12 @@ export interface ToolOptions {
  * `Scope.REQUEST` are instantiated against the same `contextId` the rest
  * of the MCP request handler uses, so request-scoped state (e.g.
  * `@Inject(REQUEST)`) sees the current MCP request.
+ *
+ * The HTTP request itself is intentionally not exposed on this object —
+ * it is already the first positional argument of the factory and there
+ * is no benefit to duplicating it.
  */
 export interface ToolFactoryContext {
-  /**
-   * Raw HTTP request — same value passed as the first positional argument.
-   * Duplicated here so factories can destructure (`(_req, { resolve, request }) => ...`)
-   * without referencing the unused first parameter. `undefined` for STDIO.
-   */
-  request: unknown;
   /**
    * Resolve any provider known to the consuming Nest module by token.
    *

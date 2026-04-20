@@ -193,9 +193,10 @@ export class SkillsTool {
 
 `ToolFactoryContext` exposes:
 
-- `request` — the same value passed as the first positional argument; provided here so factories can destructure (`(_req, { resolve, request }) => ...`).
 - `resolve(token)` — `Promise`-returning helper around `ModuleRef.resolve(token, contextId, { strict: false })`. Honors request scope: providers declared with `Scope.REQUEST` (e.g. ones that `@Inject(REQUEST)`) see the *current* MCP request, not a stale one.
 - `moduleRef` — the underlying `ModuleRef` for advanced cases that `resolve` doesn't cover.
+
+The HTTP request itself is not duplicated on the context — it is already the factory's first positional argument.
 
 The `ctx` argument is **optional** in the type signature, so single-argument factories like `(request) => ({...})` continue to work unchanged. Request-scoped resolution and `Test.overrideProvider(...).useValue(...)` are both honored — making factories that depend on services straightforward to test in isolation.
 

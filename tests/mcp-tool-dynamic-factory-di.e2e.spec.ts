@@ -85,27 +85,6 @@ export class RequestScopedAwareTool {
   }
 }
 
-/**
- * Sanity tool: the `request` field on the second-arg context must equal
- * the value passed as the first argument.
- */
-@Injectable()
-export class CtxRequestEqualityTool {
-  @Tool('ctx-request-equality', (
-    request: unknown,
-    ctx?: ToolFactoryContext,
-  ) => {
-    const matches = ctx?.request === request ? 'match' : 'mismatch';
-    return {
-      description: `ctx.request ${matches}`,
-      parameters: z.object({}),
-    };
-  })
-  async run() {
-    return { content: [{ type: 'text', text: 'ok' }] };
-  }
-}
-
 /** Factory that ignores the new ctx — proves backward compat is preserved. */
 @Injectable()
 export class LegacySingleArgTool {
@@ -139,7 +118,6 @@ async function buildApp(opts?: {
       RequestEcho,
       DiAwareTool,
       RequestScopedAwareTool,
-      CtxRequestEqualityTool,
       LegacySingleArgTool,
     ],
   });
@@ -225,23 +203,6 @@ describe('E2E: MCP Tool dynamic factory DI context', () => {
       } finally {
         await a.close();
         await b.close();
-      }
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('ctx.request equals the first positional argument', async () => {
-    const { app, port } = await buildApp();
-    try {
-      const client = await createStreamableClient(port);
-      try {
-        const tools = await client.listTools();
-        const tool = tools.tools.find((t) => t.name === 'ctx-request-equality');
-        expect(tool).toBeDefined();
-        expect(tool!.description).toBe('ctx.request match');
-      } finally {
-        await client.close();
       }
     } finally {
       await app.close();
