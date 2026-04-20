@@ -4,11 +4,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release (e.g., 1.2.3 or 1.2.3-alpha.0)'
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -51,17 +46,23 @@ jobs:
       - name: Resolve version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG_VERSION="${{ github.event.release.tag_name }}"
-          else
-            TAG_VERSION="${{ github.event.inputs.version }}"
-          fi
-          TAG_VERSION="${TAG_VERSION#v}"
-          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          # The version always comes from the checked-out package.json. For
+          # a release event we additionally assert that the release tag
+          # matches what's in the file, so we never silently ship a tarball
+          # whose internal version disagrees with the GitHub Release tag.
+          PKG_VERSION=$(node -p "require('./package.json').version")
 
-      - name: Update package.json version
-        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            TAG_VERSION="${TAG#v}"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "::error::Release tag '$TAG' (parsed as '$TAG_VERSION') does not match package.json version '$PKG_VERSION'. Bump package.json before tagging."
+              exit 1
+            fi
+          fi
+
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$PKG_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Pack tarball
         id: pack
