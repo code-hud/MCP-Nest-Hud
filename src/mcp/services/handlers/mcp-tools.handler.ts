@@ -19,7 +19,11 @@ import {
   DiscoveredCapability,
   McpRegistryDiscoveryService,
 } from '../mcp-registry-discovery.service';
-import { ToolGuardExecutionContext, ToolMetadata } from '../../decorators';
+import {
+  ToolFactoryContext,
+  ToolGuardExecutionContext,
+  ToolMetadata,
+} from '../../decorators';
 import { z } from 'zod';
 import { McpHandlerBase } from './mcp-handler.base';
 import { ZodType } from 'zod';
@@ -117,9 +121,28 @@ export class McpToolsHandler extends McpHandlerBase {
       return baseMetadata;
     }
 
+    // Build a per-request DI-aware context for the factory. We reuse the
+    // same ContextIdFactory pattern the tools/call path uses so that any
+    // request-scoped provider resolved from inside the factory shares the
+    // current MCP request's context (e.g. `@Inject(REQUEST)` returns the
+    // active request, not a stale one).
+    //
+    // For STDIO transport `httpRequest.raw` is undefined; ContextIdFactory
+    // can still derive a context id from the HttpRequest wrapper itself,
+    // which is what the tools/call path also relies on.
+    const contextId = ContextIdFactory.getByRequest(httpRequest);
+    this.moduleRef.registerRequestByContextId(httpRequest, contextId);
+
+    const factoryCtx: ToolFactoryContext = {
+      request: httpRequest.raw,
+      moduleRef: this.moduleRef,
+      resolve: <T>(token: Type<T> | string | symbol) =>
+        this.moduleRef.resolve<T>(token as any, contextId, { strict: false }),
+    };
+
     let dynamicOptions: Awaited<ReturnType<typeof factory>>;
     try {
-      dynamicOptions = await factory(httpRequest.raw);
+      dynamicOptions = await factory(httpRequest.raw, factoryCtx);
     } catch (error) {
       throw new McpError(
         ErrorCode.InternalError,

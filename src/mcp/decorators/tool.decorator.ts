@@ -1,4 +1,5 @@
 import { CanActivate, SetMetadata, Type } from '@nestjs/common';
+import type { ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { ToolAnnotations as SdkToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { MCP_TOOL_METADATA_KEY } from './constants';
@@ -45,18 +46,66 @@ export interface ToolOptions {
 }
 
 /**
+ * DI-aware context passed as the optional second argument to a
+ * {@link ToolOptionsFactory}.
+ *
+ * Provides escape hatches for factories that need to read state from
+ * NestJS-managed services without resorting to module-scoped singletons.
+ * The `resolve` helper honors per-request scope: providers that opt into
+ * `Scope.REQUEST` are instantiated against the same `contextId` the rest
+ * of the MCP request handler uses, so request-scoped state (e.g.
+ * `@Inject(REQUEST)`) sees the current MCP request.
+ */
+export interface ToolFactoryContext {
+  /**
+   * Raw HTTP request — same value passed as the first positional argument.
+   * Duplicated here so factories can destructure (`(_req, { resolve, request }) => ...`)
+   * without referencing the unused first parameter. `undefined` for STDIO.
+   */
+  request: unknown;
+  /**
+   * Resolve any provider known to the consuming Nest module by token.
+   *
+   * Uses `strict: false` so tokens registered in transitively-imported
+   * modules are reachable, matching how the tools handler resolves the
+   * tool's own host provider for `tools/call`.
+   *
+   * Tokens may be a class, a string, or a symbol — anything Nest accepts
+   * as a provider token.
+   */
+  resolve: <T>(token: Type<T> | string | symbol) => Promise<T>;
+  /**
+   * Underlying `ModuleRef`, exposed for advanced cases that `resolve`
+   * doesn't cover (e.g. `moduleRef.get(token, { strict: true })`).
+   *
+   * Note: when calling `moduleRef.resolve` directly, prefer to pass the
+   * same `contextId` the MCP handler uses; otherwise request-scoped
+   * providers may be instantiated against a different context. The
+   * `resolve` helper above already does this correctly.
+   */
+  moduleRef: ModuleRef;
+}
+
+/**
  * Dynamic tool options factory.
  *
  * Receives the underlying HTTP request (or `undefined` for STDIO transport)
- * and returns the tool definition. The returned options may omit the `name`
- * field — the static `name` provided to the decorator is always used as the
- * tool identifier for routing.
+ * and a {@link ToolFactoryContext} that exposes per-request DI access.
+ * Returns the tool definition. The returned options may omit the `name`
+ * field — the static `name` provided to the decorator is always used as
+ * the tool identifier for routing.
+ *
+ * The `ctx` argument is optional in the type signature for backward
+ * compatibility: existing single-argument factories continue to work
+ * unchanged. Factories that need DI may opt in by accepting a second
+ * argument.
  *
  * Factories are invoked at request time both for `tools/list` and
  * `tools/call`. They may be synchronous or asynchronous.
  */
 export type ToolOptionsFactory = (
   request: unknown,
+  ctx?: ToolFactoryContext,
 ) => Omit<ToolOptions, 'name'> | Promise<Omit<ToolOptions, 'name'>>;
 
 /**
