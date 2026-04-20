@@ -19,9 +19,9 @@ import { createStreamableClient } from './utils';
  * module-scoped reference.
  */
 @Injectable()
-export class SkillsService {
-  async getAvailableSkills(): Promise<string[]> {
-    return ['default-skill-a', 'default-skill-b'];
+export class FeatureFlagsService {
+  async getEnabledFeatures(): Promise<string[]> {
+    return ['search', 'export'];
   }
 }
 
@@ -41,26 +41,26 @@ export class RequestEcho {
 }
 
 @Injectable()
-export class DiAwareTool {
-  @Tool('skills-aware', async (
+export class RunFeatureTool {
+  @Tool('run-feature', async (
     _request: unknown,
     ctx?: ToolFactoryContext,
   ) => {
     if (!ctx) {
       throw new Error('ToolFactoryContext was not provided');
     }
-    const skills = await ctx.resolve(SkillsService);
-    const list = await skills.getAvailableSkills();
+    const flags = await ctx.resolve(FeatureFlagsService);
+    const enabled = await flags.getEnabledFeatures();
 
     return {
-      description: `Available skills: ${list.join(', ')}`,
+      description: `Run an enabled feature. Currently enabled: ${enabled.join(', ')}`,
       parameters: z.object({
-        skill: z.enum(list as [string, ...string[]]),
+        feature: z.enum(enabled as [string, ...string[]]),
       }),
     };
   })
-  async run({ skill }: { skill: string }) {
-    return { content: [{ type: 'text', text: `picked=${skill}` }] };
+  async run({ feature }: { feature: string }) {
+    return { content: [{ type: 'text', text: `picked=${feature}` }] };
   }
 }
 
@@ -114,9 +114,9 @@ async function buildApp(opts?: {
       }),
     ],
     providers: [
-      SkillsService,
+      FeatureFlagsService,
       RequestEcho,
-      DiAwareTool,
+      RunFeatureTool,
       RequestScopedAwareTool,
       LegacySingleArgTool,
     ],
@@ -140,13 +140,13 @@ describe('E2E: MCP Tool dynamic factory DI context', () => {
       const client = await createStreamableClient(port);
       try {
         const tools = await client.listTools();
-        const tool = tools.tools.find((t) => t.name === 'skills-aware');
+        const tool = tools.tools.find((t) => t.name === 'run-feature');
         expect(tool).toBeDefined();
         expect(tool!.description).toBe(
-          'Available skills: default-skill-a, default-skill-b',
+          'Run an enabled feature. Currently enabled: search, export',
         );
-        const enumValues = (tool!.inputSchema as any)?.properties?.skill?.enum;
-        expect(enumValues).toEqual(['default-skill-a', 'default-skill-b']);
+        const enumValues = (tool!.inputSchema as any)?.properties?.feature?.enum;
+        expect(enumValues).toEqual(['search', 'export']);
       } finally {
         await client.close();
       }
@@ -156,22 +156,24 @@ describe('E2E: MCP Tool dynamic factory DI context', () => {
   });
 
   it('Test.overrideProvider() is observed by the factory', async () => {
-    const stub: SkillsService = {
-      getAvailableSkills: async () => ['stub-skill'],
+    const stub: FeatureFlagsService = {
+      getEnabledFeatures: async () => ['stub-feature'],
     } as any;
 
     const { app, port } = await buildApp({
-      override: { provide: SkillsService, useValue: stub },
+      override: { provide: FeatureFlagsService, useValue: stub },
     });
     try {
       const client = await createStreamableClient(port);
       try {
         const tools = await client.listTools();
-        const tool = tools.tools.find((t) => t.name === 'skills-aware');
+        const tool = tools.tools.find((t) => t.name === 'run-feature');
         expect(tool).toBeDefined();
-        expect(tool!.description).toBe('Available skills: stub-skill');
-        const enumValues = (tool!.inputSchema as any)?.properties?.skill?.enum;
-        expect(enumValues).toEqual(['stub-skill']);
+        expect(tool!.description).toBe(
+          'Run an enabled feature. Currently enabled: stub-feature',
+        );
+        const enumValues = (tool!.inputSchema as any)?.properties?.feature?.enum;
+        expect(enumValues).toEqual(['stub-feature']);
       } finally {
         await client.close();
       }

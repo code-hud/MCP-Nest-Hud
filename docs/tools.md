@@ -169,23 +169,27 @@ import { Tool, ToolFactoryContext } from '@rekog/mcp-nest';
 import { z } from 'zod';
 
 @Injectable()
-class SkillsService {
-  async getAvailableSkills(userId: string): Promise<string[]> {
-    return ['lookup', 'create', 'update'];
+class FeatureFlagsService {
+  async getEnabledFeatures(tenantId?: string): Promise<string[]> {
+    return ['search', 'export', 'archive'];
   }
 }
 
 @Injectable()
-export class SkillsTool {
-  @Tool('hud-get-skill', async (request, ctx?: ToolFactoryContext) => {
-    const skills = await ctx!.resolve(SkillsService);
-    const list = await skills.getAvailableSkills((request as any)?.user?.id);
+export class RunFeatureTool {
+  @Tool('run-feature', async (request, ctx?: ToolFactoryContext) => {
+    const flags = await ctx!.resolve(FeatureFlagsService);
+    const enabled = await flags.getEnabledFeatures(
+      (request as any)?.headers?.['x-tenant-id'],
+    );
     return {
-      description: `Available skills: ${list.join(', ')}`,
-      parameters: z.object({ skill: z.enum(list as [string, ...string[]]) }),
+      description: `Run an enabled feature. Currently enabled: ${enabled.join(', ')}`,
+      parameters: z.object({
+        feature: z.enum(enabled as [string, ...string[]]),
+      }),
     };
   })
-  async getSkill({ skill }, _ctx, _request) {
+  async runFeature({ feature }, _ctx, _request) {
     // ...
   }
 }
