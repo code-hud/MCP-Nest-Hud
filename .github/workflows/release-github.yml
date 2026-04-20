@@ -66,7 +66,12 @@ jobs:
       - name: Pack tarball
         id: pack
         run: |
-          TARBALL=$(npm pack)
+          # `npm pack` runs the `prepare` lifecycle script (which builds), and
+          # by default prints script log lines to stdout *before* the tarball
+          # filename. Capturing all of that into $GITHUB_OUTPUT triggers
+          # "Invalid format" errors. `--silent` suppresses the npm logs so
+          # only the final tarball filename is emitted.
+          TARBALL=$(npm pack --silent)
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
           echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
 
