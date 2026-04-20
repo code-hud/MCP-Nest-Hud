@@ -159,6 +159,51 @@ Notes:
 - Authorization metadata applied via `@Public()`, `@RequireScopes()`, `@RequireRoles()`, and `@ToolGuards()` continues to work and is **not** overridable from the factory.
 - The tool `name` provided to the decorator always wins; the factory's return value cannot change the tool name.
 
+### Resolving NestJS providers from inside the factory
+
+The factory is a free function captured at decoration time, so `this` is not available — the host class instance can't be reached from inside it. To let factories read state from NestJS-managed services without resorting to module-scoped singletons, the factory receives a second optional argument: a `ToolFactoryContext` with a `resolve` helper backed by the same `ModuleRef` and request-scoped `contextId` the rest of the MCP request handler uses.
+
+```typescript
+import { Injectable } from '@nestjs/common';
+import { Tool, ToolFactoryContext } from '@rekog/mcp-nest';
+import { z } from 'zod';
+
+@Injectable()
+class FeatureFlagsService {
+  async getEnabledFeatures(tenantId?: string): Promise<string[]> {
+    return ['search', 'export', 'archive'];
+  }
+}
+
+@Injectable()
+export class RunFeatureTool {
+  @Tool('run-feature', async (request, ctx?: ToolFactoryContext) => {
+    const flags = await ctx!.resolve(FeatureFlagsService);
+    const enabled = await flags.getEnabledFeatures(
+      (request as any)?.headers?.['x-tenant-id'],
+    );
+    return {
+      description: `Run an enabled feature. Currently enabled: ${enabled.join(', ')}`,
+      parameters: z.object({
+        feature: z.enum(enabled as [string, ...string[]]),
+      }),
+    };
+  })
+  async runFeature({ feature }, _ctx, _request) {
+    // ...
+  }
+}
+```
+
+`ToolFactoryContext` exposes:
+
+- `resolve(token)` — `Promise`-returning helper around `ModuleRef.resolve(token, contextId, { strict: false })`. Honors request scope: providers declared with `Scope.REQUEST` (e.g. ones that `@Inject(REQUEST)`) see the *current* MCP request, not a stale one.
+- `moduleRef` — the underlying `ModuleRef` for advanced cases that `resolve` doesn't cover.
+
+The HTTP request itself is not duplicated on the context — it is already the factory's first positional argument.
+
+The `ctx` argument is **optional** in the type signature, so single-argument factories like `(request) => ({...})` continue to work unchanged. Request-scoped resolution and `Test.overrideProvider(...).useValue(...)` are both honored — making factories that depend on services straightforward to test in isolation.
+
 ## Interactive Tool with Elicitation
 
 Tools can request additional input from users:

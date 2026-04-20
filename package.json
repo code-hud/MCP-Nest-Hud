@@ -1,6 +1,6 @@
 {
   "name": "@rekog/mcp-nest",
-  "version": "1.9.7-alpha.0",
+  "version": "1.9.8",
   "description": "NestJS module for creating Model Context Protocol (MCP) servers",
   "main": "dist/index.js",
   "license": "MIT",
@@ -95,9 +95,8 @@
   },
   "overrides": {
     "qs": "^6.14.1",
-    "body-parser":"^2.2.1",
-    "jws":"^3.2.3",
+    "body-parser": "^2.2.1",
+    "jws": "^3.2.3",
     "hono": "^4.11.4"
-
   }
 }
