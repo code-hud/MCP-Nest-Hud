@@ -20,6 +20,7 @@ import {
   McpRegistryDiscoveryService,
 } from '../mcp-registry-discovery.service';
 import { ToolGuardExecutionContext, ToolMetadata } from '../../decorators';
+import { z } from 'zod';
 import { McpHandlerBase } from './mcp-handler.base';
 import { ZodType } from 'zod';
 import { HttpRequest } from '../../interfaces/http-adapter.interface';
@@ -89,6 +90,65 @@ export class McpToolsHandler extends McpHandlerBase {
     return {
       content: [{ type: 'text', text: errorText }],
       isError: true,
+    };
+  }
+
+  /**
+   * Resolves the effective tool metadata for a given request.
+   *
+   * Tools declared via the dynamic `@Tool(name, factory)` form expose a
+   * `__factory` on their discovered metadata. When present, the factory is
+   * invoked with the raw HTTP request (or `undefined` for STDIO) and its
+   * result is merged on top of the discovered metadata. Security metadata
+   * (`isPublic`, `requiredScopes`, `requiredRoles`, `guards`,
+   * `securitySchemes`) and the static `name` always come from the
+   * discovered metadata and cannot be overridden by the factory.
+   *
+   * Static tools are returned unchanged.
+   */
+  private async resolveToolMetadata(
+    tool: DiscoveredCapability<ToolMetadata>,
+    httpRequest: HttpRequest,
+  ): Promise<ToolMetadata> {
+    const baseMetadata = tool.metadata;
+    const factory = baseMetadata.__factory;
+
+    if (!factory) {
+      return baseMetadata;
+    }
+
+    let dynamicOptions: Awaited<ReturnType<typeof factory>>;
+    try {
+      dynamicOptions = await factory(httpRequest.raw);
+    } catch (error) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to resolve dynamic options for tool '${baseMetadata.name}': ${(error as Error).message}`,
+      );
+    }
+
+    const parameters =
+      dynamicOptions?.parameters !== undefined
+        ? dynamicOptions.parameters
+        : z.object({});
+
+    return {
+      // Security metadata and identifying name are always controlled by the
+      // discovered (static) metadata to keep authorization and routing
+      // deterministic across requests.
+      name: baseMetadata.name,
+      isPublic: baseMetadata.isPublic,
+      requiredScopes: baseMetadata.requiredScopes,
+      requiredRoles: baseMetadata.requiredRoles,
+      guards: baseMetadata.guards,
+      securitySchemes: baseMetadata.securitySchemes,
+      __factory: factory,
+      // Per-request overrides
+      description: dynamicOptions?.description ?? '',
+      parameters,
+      outputSchema: dynamicOptions?.outputSchema,
+      annotations: dynamicOptions?.annotations,
+      _meta: dynamicOptions?._meta,
     };
   }
 
@@ -235,58 +295,67 @@ export class McpToolsHandler extends McpHandlerBase {
         }
       }
 
-      const tools = authorizedTools.map((tool) => {
-        // Create base schema
-        const toolSchema = {
-          name: tool.metadata.name,
-          description: tool.metadata.description,
-          annotations: tool.metadata.annotations,
-          _meta: tool.metadata._meta,
-        };
-
-        // Add security schemes
-        const securitySchemes = this.authService.generateSecuritySchemes(
-          tool,
-          effectiveModuleHasGuards,
-        );
-        if (securitySchemes.length > 0) {
-          toolSchema['securitySchemes'] = securitySchemes;
-          // Note: Currently securitySchemes are not supported in MCP sdk, adding to _meta as workaround
-          // (see https://developers.openai.com/apps-sdk/reference/)
-          toolSchema._meta = {
-            ...toolSchema._meta,
-            securitySchemes,
-          };
-        }
-
-        // Add input schema if defined
-        const normalizedInputParameters = normalizeObjectSchema(
-          tool.metadata.parameters,
-        );
-        if (normalizedInputParameters) {
-          toolSchema['inputSchema'] = toJsonSchemaCompat(
-            normalizedInputParameters,
+      const tools = await Promise.all(
+        authorizedTools.map(async (tool) => {
+          // Resolve dynamic factory metadata if present; otherwise returns
+          // the discovered metadata unchanged.
+          const resolvedMetadata = await this.resolveToolMetadata(
+            tool,
+            httpRequest,
           );
-        }
 
-        // Add output schema if defined, ensuring it has type: 'object'
-        const normalizedOutputSchema = normalizeObjectSchema(
-          tool.metadata.outputSchema,
-        );
-        if (normalizedOutputSchema) {
-          const outputSchema = toJsonSchemaCompat(normalizedOutputSchema);
-
-          // Create a new object that explicitly includes type: 'object'
-          const jsonSchema = {
-            ...outputSchema,
-            type: 'object',
+          // Create base schema
+          const toolSchema = {
+            name: resolvedMetadata.name,
+            description: resolvedMetadata.description,
+            annotations: resolvedMetadata.annotations,
+            _meta: resolvedMetadata._meta,
           };
 
-          toolSchema['outputSchema'] = jsonSchema;
-        }
+          // Add security schemes
+          const securitySchemes = this.authService.generateSecuritySchemes(
+            tool,
+            effectiveModuleHasGuards,
+          );
+          if (securitySchemes.length > 0) {
+            toolSchema['securitySchemes'] = securitySchemes;
+            // Note: Currently securitySchemes are not supported in MCP sdk, adding to _meta as workaround
+            // (see https://developers.openai.com/apps-sdk/reference/)
+            toolSchema._meta = {
+              ...toolSchema._meta,
+              securitySchemes,
+            };
+          }
 
-        return toolSchema;
-      });
+          // Add input schema if defined
+          const normalizedInputParameters = normalizeObjectSchema(
+            resolvedMetadata.parameters,
+          );
+          if (normalizedInputParameters) {
+            toolSchema['inputSchema'] = toJsonSchemaCompat(
+              normalizedInputParameters,
+            );
+          }
+
+          // Add output schema if defined, ensuring it has type: 'object'
+          const normalizedOutputSchema = normalizeObjectSchema(
+            resolvedMetadata.outputSchema,
+          );
+          if (normalizedOutputSchema) {
+            const outputSchema = toJsonSchemaCompat(normalizedOutputSchema);
+
+            // Create a new object that explicitly includes type: 'object'
+            const jsonSchema = {
+              ...outputSchema,
+              type: 'object',
+            };
+
+            toolSchema['outputSchema'] = jsonSchema;
+          }
+
+          return toolSchema;
+        }),
+      );
 
       return {
         tools,
@@ -336,10 +405,22 @@ export class McpToolsHandler extends McpHandlerBase {
           );
         }
 
+        // Resolve dynamic factory metadata (no-op for static tools).
+        // Used for parameter validation and outputSchema validation below.
+        let resolvedMetadata: ToolMetadata;
+        try {
+          resolvedMetadata = await this.resolveToolMetadata(
+            toolInfo,
+            httpRequest,
+          );
+        } catch (error) {
+          return this.handleError(error as Error, toolInfo, httpRequest);
+        }
+
         try {
           // Validate input parameters against the tool's schema
-          if (toolInfo.metadata.parameters) {
-            const validation = toolInfo.metadata.parameters.safeParse(
+          if (resolvedMetadata.parameters) {
+            const validation = resolvedMetadata.parameters.safeParse(
               request.params.arguments || {},
             );
             if (!validation.success) {
@@ -419,7 +500,7 @@ export class McpToolsHandler extends McpHandlerBase {
 
           const transformedResult = this.formatToolResult(
             result,
-            toolInfo.metadata.outputSchema,
+            resolvedMetadata.outputSchema,
           );
 
           this.logger.debug('CallToolRequestSchema result', transformedResult);

@@ -117,6 +117,48 @@ async sayHelloStructured({ name, language }) {
 }
 ```
 
+## Dynamic Tool Definition (Per-Request)
+
+In addition to the static options object, `@Tool()` accepts a **factory function** that receives the underlying HTTP request and returns the tool definition. This lets the description, parameters, output schema, annotations, and `_meta` change per request — for example, based on the authenticated user, tenant, locale, or any header on the inbound request.
+
+The tool **`name` must be passed statically** as the first argument so the registry can route `tools/list` and `tools/call` deterministically without invoking the factory:
+
+```typescript
+import { Injectable } from '@nestjs/common';
+import { Tool } from '@rekog/mcp-nest';
+import { z } from 'zod';
+
+@Injectable()
+export class ProjectsTool {
+  @Tool('list-projects', (request) => {
+    const user = (request as any)?.user;
+    const allowed = user?.projectIds ?? [];
+
+    return {
+      description: `List projects accessible to ${user?.email ?? 'anonymous'}`,
+      parameters: z.object({
+        projectId: z.enum(allowed.length ? allowed : ['none']),
+      }),
+      outputSchema: z.object({
+        projects: z.array(z.object({ id: z.string(), name: z.string() })),
+      }),
+    };
+  })
+  async listProjects({ projectId }, _ctx, request) {
+    // Implementation uses the validated `projectId` and the `request`.
+    return { projects: [] };
+  }
+}
+```
+
+Notes:
+
+- The factory may be **synchronous or asynchronous** (`async` / returning a `Promise`).
+- It is invoked **per request**, both for `tools/list` and `tools/call`. There is no caching — keep it cheap or memoize externally if needed.
+- For **STDIO transport** the factory receives `undefined`, since there is no HTTP request. Handle that case (e.g. fall back to a default schema).
+- Authorization metadata applied via `@Public()`, `@RequireScopes()`, `@RequireRoles()`, and `@ToolGuards()` continues to work and is **not** overridable from the factory.
+- The tool `name` provided to the decorator always wins; the factory's return value cannot change the tool name.
+
 ## Interactive Tool with Elicitation
 
 Tools can request additional input from users:

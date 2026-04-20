@@ -23,6 +23,13 @@ export interface ToolMetadata {
   requiredScopes?: string[];
   requiredRoles?: string[];
   guards?: Type<CanActivate>[];
+  /**
+   * Optional dynamic options factory. When present, the tools handler
+   * invokes it per-request to resolve description, parameters, outputSchema,
+   * annotations and _meta. Set internally by the `@Tool(name, factory)`
+   * decorator overload — do not set manually.
+   */
+  __factory?: ToolOptionsFactory;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -38,18 +45,89 @@ export interface ToolOptions {
 }
 
 /**
- * Decorator that marks a controller method as an MCP tool.
- * @param {Object} options - The options for the decorator
- * @param {string} options.name - The name of the tool
- * @param {string} options.description - The description of the tool
- * @param {z.ZodType} [options.parameters] - The parameters of the tool
- * @param {z.ZodType} [options.outputSchema] - The output schema of the tool
- * @returns {MethodDecorator} - The decorator
+ * Dynamic tool options factory.
+ *
+ * Receives the underlying HTTP request (or `undefined` for STDIO transport)
+ * and returns the tool definition. The returned options may omit the `name`
+ * field — the static `name` provided to the decorator is always used as the
+ * tool identifier for routing.
+ *
+ * Factories are invoked at request time both for `tools/list` and
+ * `tools/call`. They may be synchronous or asynchronous.
  */
-export const Tool = (options: ToolOptions) => {
+export type ToolOptionsFactory = (
+  request: unknown,
+) => Omit<ToolOptions, 'name'> | Promise<Omit<ToolOptions, 'name'>>;
+
+/**
+ * Internal shape stored as decorator metadata when a factory is used.
+ *
+ * The `name` is captured statically (from the first decorator argument) so
+ * that the registry can index the tool deterministically without invoking
+ * the factory. The factory is resolved per-request inside the tools handler.
+ */
+export interface ToolFactoryMetadata {
+  name: string;
+  __factory: ToolOptionsFactory;
+}
+
+export function isToolFactoryMetadata(
+  value: unknown,
+): value is ToolFactoryMetadata {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as ToolFactoryMetadata).__factory === 'function'
+  );
+}
+
+/**
+ * Decorator that marks a controller method as an MCP tool.
+ *
+ * Two forms are supported:
+ *
+ * 1. Static options (the original API):
+ *    ```ts
+ *    @Tool({ name: 'my-tool', description: '...', parameters: z.object({...}) })
+ *    ```
+ *
+ * 2. Dynamic factory — the tool definition (description, parameters,
+ *    outputSchema, annotations, _meta) is resolved per-request from the
+ *    HTTP request object. The tool `name` must be provided statically as
+ *    the first argument so the registry can route calls without invoking
+ *    the factory:
+ *    ```ts
+ *    @Tool('my-tool', (req) => ({
+ *      description: `Hello ${req.user?.name}`,
+ *      parameters: z.object({ ... }),
+ *    }))
+ *    ```
+ *    For STDIO transport, the factory receives `undefined`. Factories may
+ *    be async and return a `Promise<Omit<ToolOptions, 'name'>>`.
+ */
+export function Tool(options: ToolOptions): MethodDecorator;
+export function Tool(name: string, factory: ToolOptionsFactory): MethodDecorator;
+export function Tool(
+  optionsOrName: ToolOptions | string,
+  factory?: ToolOptionsFactory,
+): MethodDecorator {
+  if (typeof optionsOrName === 'string') {
+    if (typeof factory !== 'function') {
+      throw new Error(
+        '@Tool(name, factory): factory must be a function returning ToolOptions.',
+      );
+    }
+    const factoryMetadata: ToolFactoryMetadata = {
+      name: optionsOrName,
+      __factory: factory,
+    };
+    return SetMetadata(MCP_TOOL_METADATA_KEY, factoryMetadata);
+  }
+
+  const options = optionsOrName;
   if (options.parameters === undefined) {
     options.parameters = z.object({});
   }
 
   return SetMetadata(MCP_TOOL_METADATA_KEY, options);
-};
+}

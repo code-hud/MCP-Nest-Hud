@@ -21,6 +21,7 @@ import {
   MCP_ROLES_METADATA_KEY,
   MCP_GUARDS_METADATA_KEY,
   ToolMetadata,
+  isToolFactoryMetadata,
 } from '../decorators';
 import { ResourceMetadata } from '../decorators/resource.decorator';
 import { match } from 'path-to-regexp';
@@ -444,11 +445,24 @@ export class McpRegistryDiscoveryService implements OnApplicationBootstrap {
     );
     const guards = Reflect.getMetadata(MCP_GUARDS_METADATA_KEY, methodRef);
 
-    // Add tool with security metadata
-    const baseMetadata: ToolMetadata = Reflect.getMetadata(
+    // Add tool with security metadata.
+    // The decorator stores either a static `ToolMetadata` object or a
+    // `ToolFactoryMetadata` wrapper (`{ name, __factory }`) when the dynamic
+    // form `@Tool(name, factory)` is used. In the factory case the static
+    // `name` is the only field guaranteed to be available at discovery time;
+    // all other fields are resolved per-request inside the tools handler.
+    const rawMetadata = Reflect.getMetadata(
       MCP_TOOL_METADATA_KEY,
       methodRef,
-    );
+    ) as unknown;
+
+    const baseMetadata: ToolMetadata = isToolFactoryMetadata(rawMetadata)
+      ? {
+          name: rawMetadata.name,
+          description: '',
+          __factory: rawMetadata.__factory,
+        }
+      : (rawMetadata as ToolMetadata);
 
     if (!baseMetadata.name) {
       baseMetadata.name = methodName;
